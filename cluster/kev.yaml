@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    name: node-bootstrapper
+  name: nodestrap
+---
+apiVersion: v1
+data:
+  entrypoint.sh: |
+    #!/bin/bash -x
+
+    ## make sure the variable ROOT_MOUNT_DIR is set .
+    ROOT_MOUNT_DIR=${ROOT_MOUNT_DIR:-/rootmnt}
+    SASTMP=${SASTMP:-sastmp}
+    SSD_CONFIG=${SSD_CONFIG:-0}
+
+    if [ "${SSD_CONFIG}" -eq 1 ]; then
+
+      # # if there is a /mnt on the node, it's probably SSD.
+      # # We just create a structure and set the permissions right.
+      if [ -d "${ROOT_MOUNT_DIR}/mnt" ]
+      then
+          echo "Directory /mnt exists on the node (looks like ${ROOT_MOUNT_DIR}/mnt inside the pod)"
+          echo "Here is how much space there is in it:"
+          df -h ${ROOT_MOUNT_DIR}/mnt
+          echo "and its content is"
+          ls -alr ${ROOT_MOUNT_DIR}/mnt
+
+          echo "Cleaning it up:"
+          rm -rf ${ROOT_MOUNT_DIR}/mnt/${SASTMP}
+          echo "and re-create the expected structure:"
+          mkdir -p ${ROOT_MOUNT_DIR}/mnt/${SASTMP}/
+          mkdir -p ${ROOT_MOUNT_DIR}/mnt/${SASTMP}/cdc
+          mkdir -p ${ROOT_MOUNT_DIR}/mnt/${SASTMP}/saswork
+          chmod -R 777 ${ROOT_MOUNT_DIR}/mnt/${SASTMP}/
+
+          echo "this is what it looks like now:"
+          ls -alR ${ROOT_MOUNT_DIR}/mnt/
+      else
+          echo "There is no /mnt on the node"
+      fi
+    fi
+kind: ConfigMap
+metadata:
+  labels:
+    app: nodestrap-app
+  name: entrypoint
+  namespace: nodestrap
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    app: nodestrap-app
+  name: nodestrap
+  namespace: nodestrap
+spec:
+  selector:
+    matchLabels:
+      app: nodestrap-app
+  template:
+    metadata:
+      labels:
+        app: nodestrap-app
+        name: nodestrap
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.azure.com/mode
+                operator: NotIn
+                values:
+                - system
+              matchFields: []
+      automountServiceAccountToken: false
+      containers:
+      - image: gcr.io/google-containers/pause:2.0
+        name: pause-forever
+      initContainers:
+      - command:
+        - /script1/entrypoint.sh
+        env:
+        - name: ROOT_MOUNT_DIR
+          value: /rootmnt
+        - name: SSD_CONFIG
+          value: "1"
+        - name: SASTMP
+          value: sastmp
+        image: ubuntu:18.04
+        name: config-mnt
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - mountPath: /rootmnt
+          mountPropagation: Bidirectional
+          name: root-mount
+        - mountPath: /script1/
+          name: entrypoint
+      nodeSelector:
+        kubernetes.io/os: linux
+      priorityClassName: system-node-critical
+      tolerations:
+      - effect: NoSchedule
+        key: workload.sas.com/class
+        operator: Equal
+        value: compute
+      - effect: NoSchedule
+        key: workload.sas.com/class
+        operator: Equal
+        value: connect
+      - effect: NoSchedule
+        key: workload.sas.com/class
+        operator: Equal
+        value: cas
+      volumes:
+      - hostPath:
+          path: /
+        name: root-mount
+      - configMap:
+          defaultMode: 484
+          name: entrypoint
+        name: entrypoint
+  updateStrategy:
+    type: RollingUpdate
