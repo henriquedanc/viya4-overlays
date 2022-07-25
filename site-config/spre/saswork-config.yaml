@@ -9,7 +9,7 @@ patch: |-
   template: 
     spec: 
       volumes:
-      - \$patch: delete
+      - $patch: delete
         name: viya
       - name: viya
         hostPath:
